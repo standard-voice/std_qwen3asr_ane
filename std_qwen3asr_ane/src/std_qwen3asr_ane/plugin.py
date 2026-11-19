@@ -73,7 +73,7 @@ from .deployment import unsupported_host_reason
 from .errors import CancellationToken, ModelLimitError, raise_if_cancelled
 from .languages import LANGUAGE_NAMES, classify_model_language, qwen_control_language
 from .profiles import PROFILES
-from .result_text import needs_join_space, shift_source_offsets
+from .result_text import join_separator, shift_source_offsets
 
 if TYPE_CHECKING:
     from .draft import DraftRuntime
@@ -881,31 +881,32 @@ def _merge_chunk_results(chunks: list[TranscriptionResult], duration: float) -> 
     segments = []
     words = []
     for chunk in chunks:
-        separator = (
-            " " if text and chunk.text and needs_join_space(text[-1], chunk.text[0]) else ""
-        )
+        separator = join_separator(text, chunk.text)
         offset = len(text) + len(separator)
         chunk_segments = chunk.segments
         if chunk_segments is None:
             chunk_segments = [Segment(text=chunk.text, start=None, end=None)]
         if "".join(segment.text for segment in chunk_segments) != chunk.text:
             raise RuntimeError("Window segments do not preserve the complete transcript text")
+        pending = separator
         for segment in chunk_segments:
-            segments.append(
-                segment.model_copy(
-                    update={
-                        "extra": shift_source_offsets(segment.extra, offset),
-                        "words": [
-                            word.model_copy(
-                                update={"extra": shift_source_offsets(word.extra, offset)}
-                            )
-                            for word in segment.words
-                        ]
-                        if segment.words is not None
-                        else None,
-                    }
-                )
-            )
+            update = {
+                "extra": shift_source_offsets(segment.extra, offset),
+                "words": [
+                    word.model_copy(update={"extra": shift_source_offsets(word.extra, offset)})
+                    for word in segment.words
+                ]
+                if segment.words is not None
+                else None,
+            }
+            if pending and segment.text:
+                # The window's first non-empty segment starts with the joining
+                # space, so joining the segment texts gives the merged text (spec TR.1).
+                update["text"] = pending + segment.text
+                if "source_start" in update["extra"]:
+                    update["extra"]["source_start"] -= len(pending)
+                pending = ""
+            segments.append(segment.model_copy(update=update))
         words.extend(
             word.model_copy(update={"extra": shift_source_offsets(word.extra, offset)})
             for word in (chunk.words or [])

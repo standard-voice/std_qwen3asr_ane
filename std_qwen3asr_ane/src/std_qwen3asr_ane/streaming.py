@@ -28,6 +28,7 @@ from .decoding_guidance import GuidanceRequestError
 from .errors import InferenceCancelled, ModelLimitError
 from .languages import classify_model_language
 from .longform import AudioSpan, LongFormAudioLimit, LongFormCoordinator
+from .result_text import join_separator
 from .runtime import rollback_prefix
 
 if TYPE_CHECKING:
@@ -91,6 +92,10 @@ class Qwen3ASRSession(TranscriptionSession):
         self._active_partial_emitted = False
         self._next_partial_end_sample = self._chunk_samples
         self._segment_index = 0
+        # Last character of all closed segment texts so far, joined together.
+        # It decides whether a later window's first non-empty segment needs a
+        # leading space (spec TR.1).
+        self._transcript_tail = ""
         self._unmapped_language_noted = False
         self._speaker_tracker = None
         self._request_artifacts_checked = False
@@ -181,7 +186,7 @@ class Qwen3ASRSession(TranscriptionSession):
         detected, extra = self._language_fields(result)
         return TranscriptionEvent.partial(
             self._segment_id,
-            result.text,
+            join_separator(self._transcript_tail, result.text) + result.text,
             stable_text="",
             detected_language=detected,
             audio_processed_until=(
@@ -360,7 +365,7 @@ class Qwen3ASRSession(TranscriptionSession):
         for segment in segments:
             projected_segments.append(self._segment_source_offsets(segment, source_offset))
             source_offset += len(segment.text)
-        segments = tuple(projected_segments)
+        segments = self._join_previous_window(tuple(projected_segments))
         events = tuple(
             TranscriptionEvent.closed(
                 self._segment_event_id(index),
@@ -385,9 +390,46 @@ class Qwen3ASRSession(TranscriptionSession):
             for index, segment in enumerate(segments)
         )
         self._processed_samples = max(self._processed_samples, span.end_sample)
+        window_text = "".join(segment.text for segment in segments)
+        if window_text:
+            self._transcript_tail = window_text[-1]
         self._reset_active_context()
         self._segment_index += 1
         return events
+
+    def _join_previous_window(self, segments: tuple[Segment, ...]) -> tuple[Segment, ...]:
+        """Add the joining space to the start of this window's first non-empty segment.
+
+        Segment texts are joined with no separator (spec TR.1), so the space must
+        be part of the segment's own text. The character offsets of that segment's
+        words shift by the length of the added space, so they still index its text.
+        """
+        index = next((i for i, segment in enumerate(segments) if segment.text), None)
+        if index is None:
+            return segments
+        first = segments[index]
+        separator = join_separator(self._transcript_tail, first.text)
+        if not separator:
+            return segments
+        shift = len(separator)
+        words = None
+        if first.words is not None:
+            words = []
+            for word in first.words:
+                extra = dict(word.extra)
+                if "source_start" in extra and "source_end" in extra:
+                    extra["source_start"] += shift
+                    extra["source_end"] += shift
+                words.append(word.model_copy(update={"extra": extra}))
+        text = separator + first.text
+        joined = first.model_copy(
+            update={
+                "text": text,
+                "words": words,
+                "extra": {**first.extra, "source_end": len(text)},
+            }
+        )
+        return (*segments[:index], joined, *segments[index + 1 :])
 
     async def _rescore_closed_span(self, span: AudioSpan):
         """Decode a closed window without provisional text conditioning.
