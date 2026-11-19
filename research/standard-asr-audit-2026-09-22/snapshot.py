@@ -49,12 +49,12 @@ def main() -> None:
     installed_files = source_inventory(Path(standard_asr.__file__).parent)
     models = {}
     for engine_type in (Qwen3ASREngine, ShortDictationEngine):
-        capabilities = engine_type.declared_capabilities.canonical_json()
+        capabilities = engine_type.declared_capabilities.to_protocol_dict()
         models[engine_type.properties.model_id] = {
             "properties": engine_type.properties.model_dump(mode="json"),
             "capabilities": capabilities,
             "capability_nodes": capability_nodes(capabilities),
-            "metadata": engine_type.declared_metadata.canonical_json(),
+            "metadata": engine_type.declared_metadata.to_protocol_dict(),
             "config_schema": engine_type.config_type.model_json_schema(),
             "provider_params_schema": engine_type.provider_params_type.model_json_schema(),
         }

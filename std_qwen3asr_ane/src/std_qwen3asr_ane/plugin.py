@@ -28,35 +28,36 @@ from standard_asr.engine import (
     BaseConfig,
     BaseProperties,
     BatchCapabilities,
-    CandidateLanguagesCap,
+    CandidateLanguagesCapability,
     CandidateLanguagesConstraints,
-    DeclaredCapabilities,
+    Capabilities,
     DeclaredEngineMetadata,
     Diagnostic,
-    DiarizationCap,
+    DiarizationCapability,
     DiarizationConstraints,
     DownloadConfigMixin,
     EngineBase,
-    FinalityCap,
-    FlagCap,
-    GuidanceCaps,
+    FinalityCapability,
+    GuidanceCapabilities,
     InputKind,
-    LanguageCaps,
+    LanguageCapabilities,
     LanguageConfigMixin,
-    PhraseHintsCap,
+    LanguageOverrideCapability,
+    PhraseHintsCapability,
     PhraseHintsConstraints,
     PreparedAudio,
-    PromptCap,
+    PromptCapability,
     PromptConstraints,
     ProviderParams,
     RuntimeParams,
     Segment,
     StreamingCapabilities,
-    StreamingGuidanceCaps,
-    StreamTimestampsCap,
+    StreamingGuidanceCapabilities,
+    StreamTimestampsCapability,
+    TraitFlagCapability,
     TranscriptionResult,
     TranscriptionSession,
-    WordTimestampsCap,
+    WordTimestampsCapability,
     resolve_download_root,
 )
 
@@ -223,56 +224,56 @@ class Qwen3ASREngine(EngineBase):
         detectable_languages=list(LANGUAGE_NAMES),
         description="Qwen3-ASR 1.7B using locally converted Core ML models targeting ANE.",
     )
-    declared_capabilities: ClassVar[DeclaredCapabilities] = DeclaredCapabilities(
+    declared_capabilities: ClassVar[Capabilities] = Capabilities(
         batch=BatchCapabilities(
             x_qwen3asr_multi_input={"supported": True, "constraints": {"max_group_size": 16}},
-            language=LanguageCaps(
-                runtime_override=FlagCap(supported=True),
-                candidate_languages=CandidateLanguagesCap(
+            language=LanguageCapabilities(
+                runtime_override=LanguageOverrideCapability(supported=True),
+                candidate_languages=CandidateLanguagesCapability(
                     supported=True, constraints=CandidateLanguagesConstraints(max=8)
                 ),
             ),
-            guidance=GuidanceCaps(
-                prompt=PromptCap(
+            guidance=GuidanceCapabilities(
+                prompt=PromptCapability(
                     supported=True, constraints=PromptConstraints(max_tokens=PROMPT_MAX_TOKENS)
                 ),
-                phrase_hints=PhraseHintsCap(
+                phrase_hints=PhraseHintsCapability(
                     supported=True,
                     constraints=PhraseHintsConstraints(max_terms=16, max_chars_per_term=128),
                 ),
             ),
-            word_timestamps=WordTimestampsCap(
+            word_timestamps=WordTimestampsCapability(
                 supported=True, granularities=["word", "segment", "char"]
             ),
-            diarization=DiarizationCap(
+            diarization=DiarizationCapability(
                 supported=True, constraints=DiarizationConstraints(max_speakers=32)
             ),
         ),
-        streaming_input=FlagCap(supported=True),
-        streaming_output=FlagCap(supported=True),
+        streaming_input=TraitFlagCapability(supported=True),
+        streaming_output=TraitFlagCapability(supported=True),
         streaming=StreamingCapabilities(
-            language=LanguageCaps(
-                runtime_override=FlagCap(supported=True),
-                candidate_languages=CandidateLanguagesCap(
+            language=LanguageCapabilities(
+                runtime_override=LanguageOverrideCapability(supported=True),
+                candidate_languages=CandidateLanguagesCapability(
                     supported=True, constraints=CandidateLanguagesConstraints(max=8)
                 ),
             ),
-            guidance=StreamingGuidanceCaps(
-                prompt=PromptCap(
+            guidance=StreamingGuidanceCapabilities(
+                prompt=PromptCapability(
                     supported=True, constraints=PromptConstraints(max_tokens=PROMPT_MAX_TOKENS)
                 ),
-                phrase_hints=PhraseHintsCap(
+                phrase_hints=PhraseHintsCapability(
                     supported=True,
                     constraints=PhraseHintsConstraints(max_terms=16, max_chars_per_term=128),
                 ),
             ),
-            emits_partials=FlagCap(supported=True),
-            finality_level=FinalityCap(mode="closed"),
-            word_timestamps=WordTimestampsCap(
+            emits_partials=TraitFlagCapability(supported=True),
+            finality_level=FinalityCapability(mode="closed"),
+            word_timestamps=WordTimestampsCapability(
                 supported=True, granularities=["word", "segment", "char"]
             ),
-            timestamps=StreamTimestampsCap(mode="post_align"),
-            diarization=DiarizationCap(
+            timestamps=StreamTimestampsCapability(mode="post_align"),
+            diarization=DiarizationCapability(
                 supported=True, constraints=DiarizationConstraints(max_speakers=32)
             ),
         ),
@@ -380,7 +381,7 @@ class Qwen3ASREngine(EngineBase):
         return prepared
 
     @property
-    def effective_capabilities(self) -> DeclaredCapabilities:
+    def effective_capabilities(self) -> Capabilities:
         """Compact vocabulary heads cannot apply token masks or score biases."""
         capabilities = self.declared_capabilities.model_dump()
         head = getattr(self._runtime, "head_output", None)
@@ -408,7 +409,7 @@ class Qwen3ASREngine(EngineBase):
             mode["diarization"]["supported"] = self.config.use_diarization
         if not alignment:
             capabilities["streaming"]["timestamps"]["mode"] = "none"
-        return DeclaredCapabilities.model_validate(capabilities)
+        return Capabilities.model_validate(capabilities)
 
     def _pull_command(self) -> str:
         command = self._artifacts.pull_command()

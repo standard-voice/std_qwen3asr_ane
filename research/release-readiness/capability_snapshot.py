@@ -75,10 +75,10 @@ def model_snapshot(engine_type, root: Path) -> dict:
                 engine.close()
     return {
         "properties": engine_type.properties.model_dump(mode="json"),
-        "declared_capabilities": declared.canonical_json(),
+        "declared_capabilities": declared.to_protocol_dict(),
         "declared_query_surface": query_surface(declared),
         "effective_query_surfaces": configurations,
-        "metadata": engine_type.declared_metadata.canonical_json(),
+        "metadata": engine_type.declared_metadata.to_protocol_dict(),
         "config_schema": engine_type.config_type.model_json_schema(),
         "provider_params_schema": engine_type.provider_params_type.model_json_schema(),
     }

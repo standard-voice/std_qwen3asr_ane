@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import tarfile
@@ -139,6 +140,26 @@ def requirement_for(install_kind: str, root: Path, wheel: Path, extras: tuple[st
     if install_kind == "source":
         return f"{PROJECT_NAME}{suffix} @ {root.as_uri()}"
     return f"{PROJECT_NAME}{suffix} @ {wheel.as_uri()}"
+
+
+def resolve_standard_asr_commit(requirement: str) -> str:
+    """Return the standard-asr commit that a clean install resolves the requirement to.
+
+    A full commit SHA is that commit. A branch such as ``main`` is resolved once
+    with ``git ls-remote``, so every matrix cell is checked against one commit.
+    """
+    url, ref = requirement.split(" @ git+", 1)[1].rsplit("@", 1)
+    if re.fullmatch(r"[0-9a-f]{40}", ref):
+        return ref
+    refs = subprocess.run(
+        ["git", "ls-remote", url, f"refs/heads/{ref}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    if not refs:
+        raise RuntimeError(f"standard-asr branch {ref!r} was not found at {url}")
+    return refs[0]
 
 
 def probe_script(extras: tuple[str, ...], standard_asr_commit: str) -> str:
@@ -538,7 +559,7 @@ def main() -> int:
         for requirement in project["dependencies"]
         if requirement.startswith("standard-asr @ git+")
     )
-    standard_asr_commit = standard_asr_requirement.rsplit("@", 1)[1]
+    standard_asr_commit = resolve_standard_asr_commit(standard_asr_requirement)
     uv_version = subprocess.run(
         ["uv", "--version"], cwd=root, capture_output=True, text=True, check=True
     ).stdout.strip()
