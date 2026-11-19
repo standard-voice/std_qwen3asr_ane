@@ -6,13 +6,26 @@ from collections.abc import Mapping
 
 
 def needs_join_space(left: str, right: str) -> bool:
-    """Separate independent word-delimited windows without adding CJK spaces."""
+    """Separate independent word-delimited windows, but not Chinese or Japanese ones.
+
+    Chinese and Japanese text takes no space between windows. Korean separates
+    words with spaces, so Hangul syllables join like Latin text.
+    """
     if left.isspace() or right.isspace():
         return False
-    return not any(
-        "\u2e80" <= character <= "\ua4cf" or "\uac00" <= character <= "\ud7af"
-        for character in (left, right)
-    )
+    return not any("\u2e80" <= character <= "\ua4cf" for character in (left, right))
+
+
+def join_separator(transcript: str, following: str) -> str:
+    """Return the separator to put before a later window's text: ``" "`` or ``""``.
+
+    ``transcript`` is the text so far and ``following`` is the next window's text.
+    Standard ASR joins segment texts with no separator (spec TR.1), so the first
+    non-empty segment of each later window starts with this separator itself.
+    """
+    if transcript and following and needs_join_space(transcript[-1], following[0]):
+        return " "
+    return ""
 
 
 def shift_source_offsets(extra: Mapping, offset: int) -> dict:

@@ -619,7 +619,9 @@ def test_closed_windows_use_measured_finalizer_output_and_one_session_speaker_tr
         "utterance-1",
         "utterance-1.1",
     ]
-    assert [event.text for event in closed] == ["hello ", "world", "hello ", "world"]
+    # The second window's first segment carries the space that joins it to the
+    # first window, because segment texts concatenate with no separator.
+    assert [event.text for event in closed] == ["hello ", "world", " hello ", "world"]
     assert [event.start for event in closed] == [0.01, 0.10, 0.26, 0.35]
     assert [event.end for event in closed] == [0.08, 0.20, 0.33, 0.45]
     assert all(event.words and len(event.words) == 1 for event in closed)
@@ -627,9 +629,9 @@ def test_closed_windows_use_measured_finalizer_output_and_one_session_speaker_tr
     assert [word.speaker for word in closed_words] == ["A", "B", "A", "B"]
     assert [event.speaker for event in closed] == ["A", "B", "A", "B"]
     assert [event.extra["source_start"] for event in closed] == [0, 0, 0, 0]
-    assert [event.extra["source_end"] for event in closed] == [6, 5, 6, 5]
-    assert [word.extra["source_start"] for word in closed_words] == [0, 0, 0, 0]
-    assert [word.extra["source_end"] for word in closed_words] == [5, 5, 5, 5]
+    assert [event.extra["source_end"] for event in closed] == [6, 5, 7, 5]
+    assert [word.extra["source_start"] for word in closed_words] == [0, 0, 1, 0]
+    assert [word.extra["source_end"] for word in closed_words] == [5, 5, 6, 5]
     assert all(word.extra["source_coordinate_space"] == "segment_text" for word in closed_words)
     for event in closed:
         for word in event.words or []:
@@ -643,10 +645,10 @@ def test_closed_windows_use_measured_finalizer_output_and_one_session_speaker_tr
     assert reduced.text == "hello world hello world"
     assert [segment.speaker for segment in reduced.segments or []] == ["A", "B", "A", "B"]
     assert all(segment.extra == {} for segment in reduced.segments or [])
-    assert reduced.words is None
     reduced_words = [word for segment in reduced.segments or [] for word in segment.words or []]
+    assert reduced.words == reduced_words
     assert [word.speaker for word in reduced_words] == ["A", "B", "A", "B"]
-    assert [word.extra["source_start"] for word in reduced_words] == [0, 0, 0, 0]
+    assert [word.extra["source_start"] for word in reduced_words] == [0, 0, 1, 0]
     for segment in reduced.segments or []:
         for word in segment.words or []:
             assert segment.text[word.extra["source_start"] : word.extra["source_end"]] == word.text
@@ -732,13 +734,13 @@ def test_streaming_optional_outputs_preserve_segments_words_speakers_and_exact_e
     assert [event.speaker for event in closed] == (["A", "B"] if with_diarization else [None])
     assert all((event.words is not None) is (granularity != "segment") for event in closed)
     result = session.result()
-    expected_text = "甲 乙" if granularity == "char" and with_diarization else text
-    assert result.text == expected_text
+    assert result.text == text
     assert "".join(segment.text for segment in result.segments or []) == text
     assert [segment.speaker for segment in result.segments or []] == (
         ["A", "B"] if with_diarization else [None]
     )
-    assert result.words is None
+    segment_words = [word for segment in result.segments or [] for word in segment.words or []]
+    assert result.words == (segment_words if granularity != "segment" else None)
     assert all(
         (segment.words is not None) is (granularity != "segment")
         for segment in result.segments or []
@@ -907,11 +909,59 @@ def test_cjk_longform_preserves_event_text_and_uses_standard_result_composition(
     assert [event.text for event in closed] == ["你好", "你好"]
     assert [event.extra["source_start"] for event in closed] == [0, 0]
     assert [event.extra["source_end"] for event in closed] == [2, 2]
-    assert session.result().text == "你好 你好"
+    assert session.result().text == "你好你好"
     reducer = StreamReducer()
     for event in events:
         reducer.add(event)
     assert session.result() == reducer.result()
+
+
+def test_word_delimited_longform_windows_carry_their_joining_space(engine, monkeypatch):
+    engine._runtime.max_audio_seconds = 0.25
+    engine.config = engine.config.model_copy(update={"stream_chunk_seconds": 0.1})
+
+    def recognize(samples, params, **kwargs):
+        del samples, params, kwargs
+        return SimpleNamespace(
+            text="hello",
+            language="en",
+            raw_text="language English<asr_text>hello",
+            raw_model_language="English",
+        )
+
+    def finalize(raw, samples, params, offset_seconds=0.0, **kwargs):
+        del raw, samples, params, offset_seconds, kwargs
+        return TranscriptionResult(
+            text="hello",
+            segments=[
+                Segment(
+                    start=None,
+                    end=None,
+                    text="hello",
+                    extra={"source_start": 0, "source_end": 5},
+                )
+            ],
+        )
+
+    monkeypatch.setattr(engine, "_recognize_chunk", recognize)
+    monkeypatch.setattr(engine, "_finalize_chunk", finalize)
+    session = engine.start_transcription(audio_format=FORMAT)
+    events = asyncio.run(recorded(session, [WIRE]))
+
+    # Segment texts are joined with no separator, so the later window's first
+    # segment starts with the joining space, in partial and closed events alike.
+    partials = [event for event in events if event.type == "partial"]
+    assert {event.text for event in partials if event.segment_id == "utterance-0"} <= {"hello"}
+    later = [event.text for event in partials if event.segment_id == "utterance-1"]
+    assert later and all(text == " hello" for text in later)
+    closed = [event for event in events if event.type == "final"]
+    assert [event.text for event in closed] == ["hello", " hello"]
+    assert [event.extra["source_end"] for event in closed] == [5, 6]
+    result = session.result()
+    assert result.text == "hello hello"
+    assert "".join(segment.text for segment in result.segments or []) == result.text
+    assert not [d for d in result.diagnostics if d.code == "text_segments_mismatch"]
+    assert_compliant(events, engine)
 
 
 def test_cancellation_reaches_the_auxiliary_finalizer(engine, monkeypatch):

@@ -28,35 +28,36 @@ from standard_asr.engine import (
     BaseConfig,
     BaseProperties,
     BatchCapabilities,
-    CandidateLanguagesCap,
+    CandidateLanguagesCapability,
     CandidateLanguagesConstraints,
-    DeclaredCapabilities,
+    Capabilities,
     DeclaredEngineMetadata,
     Diagnostic,
-    DiarizationCap,
+    DiarizationCapability,
     DiarizationConstraints,
     DownloadConfigMixin,
     EngineBase,
-    FinalityCap,
-    FlagCap,
-    GuidanceCaps,
+    FinalityCapability,
+    GuidanceCapabilities,
     InputKind,
-    LanguageCaps,
+    LanguageCapabilities,
     LanguageConfigMixin,
-    PhraseHintsCap,
+    LanguageOverrideCapability,
+    PhraseHintsCapability,
     PhraseHintsConstraints,
     PreparedAudio,
-    PromptCap,
+    PromptCapability,
     PromptConstraints,
     ProviderParams,
     RuntimeParams,
     Segment,
     StreamingCapabilities,
-    StreamingGuidanceCaps,
-    StreamTimestampsCap,
+    StreamingGuidanceCapabilities,
+    StreamTimestampsCapability,
+    TraitFlagCapability,
     TranscriptionResult,
     TranscriptionSession,
-    WordTimestampsCap,
+    WordTimestampsCapability,
     resolve_download_root,
 )
 
@@ -72,7 +73,7 @@ from .deployment import unsupported_host_reason
 from .errors import CancellationToken, ModelLimitError, raise_if_cancelled
 from .languages import LANGUAGE_NAMES, classify_model_language, qwen_control_language
 from .profiles import PROFILES
-from .result_text import needs_join_space, shift_source_offsets
+from .result_text import join_separator, shift_source_offsets
 
 if TYPE_CHECKING:
     from .draft import DraftRuntime
@@ -223,56 +224,56 @@ class Qwen3ASREngine(EngineBase):
         detectable_languages=list(LANGUAGE_NAMES),
         description="Qwen3-ASR 1.7B using locally converted Core ML models targeting ANE.",
     )
-    declared_capabilities: ClassVar[DeclaredCapabilities] = DeclaredCapabilities(
+    declared_capabilities: ClassVar[Capabilities] = Capabilities(
         batch=BatchCapabilities(
             x_qwen3asr_multi_input={"supported": True, "constraints": {"max_group_size": 16}},
-            language=LanguageCaps(
-                runtime_override=FlagCap(supported=True),
-                candidate_languages=CandidateLanguagesCap(
+            language=LanguageCapabilities(
+                runtime_override=LanguageOverrideCapability(supported=True),
+                candidate_languages=CandidateLanguagesCapability(
                     supported=True, constraints=CandidateLanguagesConstraints(max=8)
                 ),
             ),
-            guidance=GuidanceCaps(
-                prompt=PromptCap(
+            guidance=GuidanceCapabilities(
+                prompt=PromptCapability(
                     supported=True, constraints=PromptConstraints(max_tokens=PROMPT_MAX_TOKENS)
                 ),
-                phrase_hints=PhraseHintsCap(
+                phrase_hints=PhraseHintsCapability(
                     supported=True,
                     constraints=PhraseHintsConstraints(max_terms=16, max_chars_per_term=128),
                 ),
             ),
-            word_timestamps=WordTimestampsCap(
+            word_timestamps=WordTimestampsCapability(
                 supported=True, granularities=["word", "segment", "char"]
             ),
-            diarization=DiarizationCap(
+            diarization=DiarizationCapability(
                 supported=True, constraints=DiarizationConstraints(max_speakers=32)
             ),
         ),
-        streaming_input=FlagCap(supported=True),
-        streaming_output=FlagCap(supported=True),
+        streaming_input=TraitFlagCapability(supported=True),
+        streaming_output=TraitFlagCapability(supported=True),
         streaming=StreamingCapabilities(
-            language=LanguageCaps(
-                runtime_override=FlagCap(supported=True),
-                candidate_languages=CandidateLanguagesCap(
+            language=LanguageCapabilities(
+                runtime_override=LanguageOverrideCapability(supported=True),
+                candidate_languages=CandidateLanguagesCapability(
                     supported=True, constraints=CandidateLanguagesConstraints(max=8)
                 ),
             ),
-            guidance=StreamingGuidanceCaps(
-                prompt=PromptCap(
+            guidance=StreamingGuidanceCapabilities(
+                prompt=PromptCapability(
                     supported=True, constraints=PromptConstraints(max_tokens=PROMPT_MAX_TOKENS)
                 ),
-                phrase_hints=PhraseHintsCap(
+                phrase_hints=PhraseHintsCapability(
                     supported=True,
                     constraints=PhraseHintsConstraints(max_terms=16, max_chars_per_term=128),
                 ),
             ),
-            emits_partials=FlagCap(supported=True),
-            finality_level=FinalityCap(mode="closed"),
-            word_timestamps=WordTimestampsCap(
+            emits_partials=TraitFlagCapability(supported=True),
+            finality_level=FinalityCapability(mode="closed"),
+            word_timestamps=WordTimestampsCapability(
                 supported=True, granularities=["word", "segment", "char"]
             ),
-            timestamps=StreamTimestampsCap(mode="post_align"),
-            diarization=DiarizationCap(
+            timestamps=StreamTimestampsCapability(mode="post_align"),
+            diarization=DiarizationCapability(
                 supported=True, constraints=DiarizationConstraints(max_speakers=32)
             ),
         ),
@@ -380,7 +381,7 @@ class Qwen3ASREngine(EngineBase):
         return prepared
 
     @property
-    def effective_capabilities(self) -> DeclaredCapabilities:
+    def effective_capabilities(self) -> Capabilities:
         """Compact vocabulary heads cannot apply token masks or score biases."""
         capabilities = self.declared_capabilities.model_dump()
         head = getattr(self._runtime, "head_output", None)
@@ -408,7 +409,7 @@ class Qwen3ASREngine(EngineBase):
             mode["diarization"]["supported"] = self.config.use_diarization
         if not alignment:
             capabilities["streaming"]["timestamps"]["mode"] = "none"
-        return DeclaredCapabilities.model_validate(capabilities)
+        return Capabilities.model_validate(capabilities)
 
     def _pull_command(self) -> str:
         command = self._artifacts.pull_command()
@@ -880,31 +881,32 @@ def _merge_chunk_results(chunks: list[TranscriptionResult], duration: float) -> 
     segments = []
     words = []
     for chunk in chunks:
-        separator = (
-            " " if text and chunk.text and needs_join_space(text[-1], chunk.text[0]) else ""
-        )
+        separator = join_separator(text, chunk.text)
         offset = len(text) + len(separator)
         chunk_segments = chunk.segments
         if chunk_segments is None:
             chunk_segments = [Segment(text=chunk.text, start=None, end=None)]
         if "".join(segment.text for segment in chunk_segments) != chunk.text:
             raise RuntimeError("Window segments do not preserve the complete transcript text")
+        pending = separator
         for segment in chunk_segments:
-            segments.append(
-                segment.model_copy(
-                    update={
-                        "extra": shift_source_offsets(segment.extra, offset),
-                        "words": [
-                            word.model_copy(
-                                update={"extra": shift_source_offsets(word.extra, offset)}
-                            )
-                            for word in segment.words
-                        ]
-                        if segment.words is not None
-                        else None,
-                    }
-                )
-            )
+            update = {
+                "extra": shift_source_offsets(segment.extra, offset),
+                "words": [
+                    word.model_copy(update={"extra": shift_source_offsets(word.extra, offset)})
+                    for word in segment.words
+                ]
+                if segment.words is not None
+                else None,
+            }
+            if pending and segment.text:
+                # The window's first non-empty segment starts with the joining
+                # space, so joining the segment texts gives the merged text (spec TR.1).
+                update["text"] = pending + segment.text
+                if "source_start" in update["extra"]:
+                    update["extra"]["source_start"] -= len(pending)
+                pending = ""
+            segments.append(segment.model_copy(update=update))
         words.extend(
             word.model_copy(update={"extra": shift_source_offsets(word.extra, offset)})
             for word in (chunk.words or [])

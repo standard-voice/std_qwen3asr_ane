@@ -183,7 +183,8 @@ def test_longform_merge_preserves_exact_segment_composition_and_global_source_of
 
     assert merged.text == "hello world again now"
     assert merged.segments is not None
-    assert [segment.text for segment in merged.segments] == ["hello ", "world", "again ", "now"]
+    assert [segment.text for segment in merged.segments] == ["hello ", "world", " again ", "now"]
+    assert "".join(segment.text for segment in merged.segments) == merged.text
     for segment in merged.segments:
         start = segment.extra["source_start"]
         end = segment.extra["source_end"]

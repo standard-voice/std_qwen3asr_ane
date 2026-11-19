@@ -13,7 +13,13 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-  "standard-asr @ git+https://github.com/standard-voice/standard_asr.git@97bfdb28134c114088ec335596aa6bca53f9204f",
+  # Track GitHub `main` until standard-asr 0.2.0 is on PyPI, then require that
+  # release: the released 0.1.x lacks protocol 0.2, which this plugin needs.
+  # `uv.lock` pins the exact commit. All first-party plugins name the same
+  # `@main`, so they can be installed in one environment. A commit pin here
+  # would make the installer swap in that commit, which the other plugins
+  # cannot use.
+  "standard-asr @ git+https://github.com/standard-voice/standard_asr.git@main",
   "coremltools>=9.0,<10",
   "numpy>=2.0",
   "tokenizers>=0.22",
